@@ -1,0 +1,76 @@
+name: Build DELTA-tonic Test APK
+
+# Run manually from the Actions tab of a GitHub repository containing this source.
+# Creates a standard Android debug-signed APK; no signing secrets needed.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Apply DELTA-tonic identity (also works on a clean upstream fork)
+        run: |
+          for file in app/src/main/res/values*/strings.xml; do
+            sed -i 's#<string name="app_name">Supertonic TTS</string>#<string name="app_name">DELTA-tonic TTS</string>#g' "$file"
+          done
+          sed -i 's#android:label="Supertonic TTS"#android:label="@string/app_name"#g' app/src/main/AndroidManifest.xml
+          sed -i 's#applicationId = "com.brahmadeo.supertonic.tts"#applicationId = "com.deltagenesis.deltatonic.tts"#g' app/build.gradle
+          grep -q 'applicationId = "com.deltagenesis.deltatonic.tts"' app/build.gradle
+          grep -q '<string name="app_name">DELTA-tonic TTS</string>' app/src/main/res/values/strings.xml
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android NDK r29
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+
+      - name: Configure Android toolchain
+        run: |
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+          echo "ndk.dir=${{ steps.setup-ndk.outputs.ndk-path }}" >> local.properties
+          echo "${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin" >> "$GITHUB_PATH"
+
+      - name: Set up Rust for ARM64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Configure Rust linker and vendor dependencies
+        run: |
+          cd rust
+          cargo vendor vendor
+          mkdir -p .cargo
+          cat > .cargo/config.toml <<'EOF'
+          [target.aarch64-linux-android]
+          linker = "aarch64-linux-android34-clang"
+          [source.crates-io]
+          replace-with = "vendored-sources"
+          [source.vendored-sources]
+          directory = "vendor"
+          EOF
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK (ARM64)
+        run: ./gradlew assembleDebug -PrustTargets=arm64
+
+      - name: Upload debug-signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DELTA-tonic-TTS-debug-ARM64
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
